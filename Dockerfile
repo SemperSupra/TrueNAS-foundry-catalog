@@ -2,7 +2,7 @@
 ARG PYTHON_IMAGE
 FROM ${PYTHON_IMAGE} AS stage
 ARG FOUNDRY_REF=4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
+# Python standard library HTTPS fetches exact SHA-256-pinned source; no apt/git installs.
 COPY scripts/fetch-foundry.sh /tmp/fetch-foundry.sh
 RUN FOUNDRY_REF="$FOUNDRY_REF" sh /tmp/fetch-foundry.sh
 FROM ${PYTHON_IMAGE}
