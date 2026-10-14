@@ -21,5 +21,7 @@ jobs:
           FOUNDRY_REF: 4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825
           VENDOR_DIR: ${{ github.workspace }}/vendor
         run: sh scripts/fetch-foundry.sh
+      - name: Record exact pinned source file SHA-256
+        run: sha256sum vendor/foundry_catalog_federation.py vendor/foundry_catalog_read_http.py
       - name: Full authenticated API integration with actual Foundry core
         run: python3 -m unittest discover -s tests -p 'test_actual_core_integration.py' -v
