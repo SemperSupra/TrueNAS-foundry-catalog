@@ -1,0 +1,25 @@
+name: Foundry Catalog source-only qualification
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Product-specific TLS/web tests (stubbed Foundry core)
+        run: python3 -m unittest discover -s tests -p 'test_product_source.py' -v
+      - name: Acquire exact pinned Foundry read core
+        env:
+          FOUNDRY_REF: 4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825
+          VENDOR_DIR: ${{ github.workspace }}/vendor
+        run: sh scripts/fetch-foundry.sh
+      - name: Full authenticated API integration with actual Foundry core
+        run: python3 -m unittest discover -s tests -p 'test_actual_core_integration.py' -v
