@@ -1,0 +1,11 @@
+{
+  "schema": "truenas-foundry-catalog-base-image-lock/v0",
+  "image": "docker.io/library/python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641",
+  "platform": "linux/amd64",
+  "digest_kind": "OCI multi-platform image index",
+  "source": "Docker Official Images Python (Docker Hub)",
+  "observed_with": "docker buildx imagetools inspect docker.io/library/python:3.13-slim-bookworm",
+  "evidence_run": "https://github.com/SemperSupra/TrueNAS-foundry-catalog/actions/runs/38647557307",
+  "admission": "RDTE_CANDIDATE_ONLY",
+  "notes": "An immutable base-image index is not a vulnerability review, a reproducible build guarantee, or a signed product release. Further qualification required."
+}
