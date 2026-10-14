@@ -1,0 +1,50 @@
+name: Build and smoke test disposable OCI candidate
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'src/**'
+      - 'assets/**'
+      - 'scripts/fetch-foundry.sh'
+      - 'build/base-image.lock.json'
+      - 'tests/ci_container_smoke.sh'
+      - '.github/workflows/qualify-candidate-image.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: foundry-catalog-candidate-image-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  candidate-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate immutable OCI base lock
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, re
+          doc = json.load(open("build/base-image.lock.json"))
+          assert doc["schema"] == "truenas-foundry-catalog-base-image-lock/v0"
+          assert doc["platform"] == "linux/amd64"
+          assert re.fullmatch(r"docker.io/library/python:3.13-slim-bookworm@sha256:[0-9a-f]{64}", doc["image"])
+          assert doc["admission"] == "RDTE_CANDIDATE_ONLY"
+          PY
+      - name: Build source-pinned isolated candidate (no push)
+        shell: bash
+        run: |
+          BASE="$(python3 -c 'import json; print(json.load(open("build/base-image.lock.json"))["image"])')"
+          docker buildx build --platform linux/amd64 --load --progress plain \
+            --build-arg "PYTHON_IMAGE=$BASE" \
+            --build-arg "FOUNDRY_REF=4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825" \
+            -t foundry-catalog:rdte-local .
+      - name: Exercise TLS service as unprivileged read-only container
+        run: sh tests/ci_container_smoke.sh foundry-catalog:rdte-local
+      - name: Capture build inputs without claiming a registry release
+        run: |
+          docker image inspect foundry-catalog:rdte-local --format 'Local image ID: {{.Id}}'
+          echo 'This local image is not pushed, signed, SBOM-qualified or TrueNAS-install-qualified.'
