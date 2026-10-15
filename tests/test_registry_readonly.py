@@ -82,6 +82,12 @@ class GhcrReadOnlyTests(unittest.TestCase):
             with self.subTest(size=len(raw)),self.assertRaises(v.AdmissionError):
                 v.verify(ref,raw)
 
+    def test_duplicate_json_keys_rejected(self):
+        raw=b'{"schemaVersion":2,"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}'
+        ref="ghcr.io/sempersupra/truenas-foundry-catalog@sha256:"+hashlib.sha256(raw).hexdigest()
+        with self.assertRaisesRegex(v.AdmissionError, "duplicate JSON"):
+            v.verify(ref,raw)
+
     def test_no_publish_or_login(self):
         text=(ROOT/"scripts/verify_registry_candidate.py").read_text()
         self.assertIn('"imagetools", "inspect", "--raw"',text)

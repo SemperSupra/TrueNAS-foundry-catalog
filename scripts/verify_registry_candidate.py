@@ -17,6 +17,14 @@ MANIFEST_TYPES = {"application/vnd.oci.image.manifest.v1+json",
 class AdmissionError(ValueError):
     pass
 
+def reject_duplicate_pairs(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise AdmissionError("duplicate JSON key in OCI index")
+        out[key] = value
+    return out
+
 def verify(reference, raw):
     match = REF.fullmatch(reference)
     if not match:
@@ -27,7 +35,7 @@ def verify(reference, raw):
     if actual != match.group(1):
         raise AdmissionError("registry index digest mismatch")
     try:
-        index = json.loads(raw)
+        index = json.loads(raw, object_pairs_hook=reject_duplicate_pairs)
     except (ValueError, UnicodeDecodeError) as exc:
         raise AdmissionError("malformed registry index") from exc
     if not isinstance(index, dict) or index.get("schemaVersion") != 2 or index.get("mediaType") not in INDEX_TYPES:

@@ -10,12 +10,14 @@ permissions:
   contents: read
 jobs:
   registry-contract:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Test fail-closed registry identity and manifest contract
         run: python3 -m unittest discover -s tests -p test_registry_readonly.py -v
       - name: Confirm real registry raw manifest identity (read-only official Python base)
