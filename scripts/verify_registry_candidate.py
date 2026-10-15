@@ -36,6 +36,8 @@ def verify(reference, raw):
         raise AdmissionError("registry index digest mismatch")
     try:
         index = json.loads(raw, object_pairs_hook=reject_duplicate_pairs)
+    except AdmissionError:
+        raise
     except (ValueError, UnicodeDecodeError) as exc:
         raise AdmissionError("malformed registry index") from exc
     if not isinstance(index, dict) or index.get("schemaVersion") != 2 or index.get("mediaType") not in INDEX_TYPES:
