@@ -40,6 +40,12 @@ jobs:
                            '002bee37818faab404a39537c15b52ce3e42207c7e4582b11ef29445c8367923']:
               assert expected in fetch
           PY
+      - name: Resolve currently mutable BuildKit and Syft scanner digests for lock review
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect docker.io/moby/buildkit:buildx-stable-1 | head -n 8
+          docker buildx imagetools inspect docker.io/docker/buildkit-syft-scanner:stable-1 | head -n 8
       - name: Build local OCI layout with SPDX SBOM and SLSA provenance
         shell: bash
         env:
