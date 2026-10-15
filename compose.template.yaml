@@ -1,0 +1,28 @@
+# TEMPLATE ONLY — PLACEHOLDERS MUST BE REPLACED WITH EXACT ADMITTED VALUES.
+# Container TLS mandatory; only host loopback until ingress is qualified.
+services:
+  foundry-catalog:
+    image: ghcr.io/PRODUCT_OWNER/foundry-catalog@sha256:REPLACE_WITH_VERIFIED_DIGEST
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports: ["127.0.0.1:38443:8443"]
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /mnt/POOL/apps/foundry-catalog/indexes
+        target: /data/indexes
+        read_only: true
+      - type: bind
+        source: /mnt/POOL/apps/foundry-catalog/token
+        target: /run/secrets/catalog-token
+        read_only: true
+      - type: bind
+        source: /mnt/POOL/apps/foundry-catalog/tls.crt
+        target: /run/secrets/tls.crt
+        read_only: true
+      - type: bind
+        source: /mnt/POOL/apps/foundry-catalog/tls.key
+        target: /run/secrets/tls.key
+        read_only: true

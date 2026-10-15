@@ -1,0 +1,164 @@
+name: Qualify unpromoted OCI supply-chain attestations
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oci-attestation-qualification.yml'
+      - 'Dockerfile'
+      - 'scripts/fetch-foundry.sh'
+      - 'src/**'
+      - 'assets/**'
+      - 'build/base-image.lock.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: catalog-oci-attest-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unpromoted-oci:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify pinned inputs and source identity
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+          lock=json.loads(pathlib.Path('build/base-image.lock.json').read_text())
+          assert lock['schema']=='truenas-foundry-catalog-base-image-lock/v0'
+          assert lock['admission']=='RDTE_CANDIDATE_ONLY'
+          assert lock['platform']=='linux/amd64'
+          assert re.fullmatch(r'docker.io/library/python:3.13-slim-bookworm@sha256:[0-9a-f]{64}',lock['image'])
+          fetch=pathlib.Path('scripts/fetch-foundry.sh').read_text()
+          assert '4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825' in pathlib.Path('Dockerfile').read_text()
+          for expected in ['cd6a1bb4a90e3edb76988a1aed8f2a07e82480c4b8cd1b467ea5ea241a2cabc5',
+                           '002bee37818faab404a39537c15b52ce3e42207c7e4582b11ef29445c8367923']:
+              assert expected in fetch
+          PY
+      - name: Verify immutable BuildKit and SBOM generator indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect docker.io/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea >/dev/null
+          docker buildx imagetools inspect docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 >/dev/null
+      - name: Build local OCI layout with SPDX SBOM and SLSA provenance
+        shell: bash
+        env:
+          BUILDX_METADATA_PROVENANCE: max
+        run: |
+          set -euo pipefail
+          docker buildx version
+          docker buildx create --name catalog-evidence --driver docker-container --driver-opt "image=docker.io/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea" --use
+          docker buildx inspect --bootstrap
+          BASE="$(python3 -c 'import json; print(json.load(open("build/base-image.lock.json"))["image"])')"
+          docker buildx build --progress plain --platform linux/amd64 \
+            --build-arg "PYTHON_IMAGE=$BASE" \
+            --build-arg "FOUNDRY_REF=4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825" \
+            --provenance=mode=max --sbom="generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9" \
+            --output "type=oci,dest=$RUNNER_TEMP/catalog-candidate.oci.tar" \
+            --metadata-file "$RUNNER_TEMP/catalog-build-metadata.json" .
+      - name: Independently verify local OCI blob tree and attestation predicates
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          OCI_TAR: ${{ runner.temp }}/catalog-candidate.oci.tar
+          OCI_METADATA: ${{ runner.temp }}/catalog-build-metadata.json
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          def fail(message):
+              raise SystemExit('OCI ATTESTATION HOLD: '+message)
+          with tarfile.open(os.environ['OCI_TAR'],'r:*') as archive:
+              def member(name):
+                  try:
+                      item=archive.getmember(name)
+                      if not item.isfile() or item.size>100_000_000: fail('invalid blob member: '+name)
+                      return archive.extractfile(item).read()
+                  except KeyError: fail('missing '+name)
+              index_bytes=member('index.json')
+              index=json.loads(index_bytes)
+              if index.get('schemaVersion')!=2: fail('invalid OCI index')
+              def get_blob(descriptor):
+                  digest=descriptor.get('digest','')
+                  if not digest.startswith('sha256:') or len(digest)!=71: fail('invalid descriptor digest')
+                  data=member('blobs/sha256/'+digest[7:])
+                  if hashlib.sha256(data).hexdigest()!=digest[7:]: fail('blob digest mismatch')
+                  if len(data)!=descriptor.get('size'): fail('blob size mismatch')
+                  return json.loads(data)
+              images=[]; attestations=[]; index_digests={'sha256:'+hashlib.sha256(index_bytes).hexdigest()}
+              def walk(current,depth=0):
+                  if depth>4: fail('nested OCI index too deep')
+                  for desc in current.get('manifests',[]):
+                      mt=desc.get('mediaType','')
+                      if mt in ('application/vnd.oci.image.index.v1+json','application/vnd.docker.distribution.manifest.list.v2+json'):
+                          if desc['digest'] in index_digests: fail('recursive OCI index')
+                          index_digests.add(desc['digest'])
+                          walk(get_blob(desc),depth+1)
+                          continue
+                      platform=desc.get('platform') or {}
+                      annotation=desc.get('annotations') or {}
+                      if platform.get('os')=='linux' and platform.get('architecture')=='amd64':
+                          images.append(desc)
+                      elif annotation.get('vnd.docker.reference.type')=='attestation-manifest':
+                          attestations.append(desc)
+              walk(index)
+              if len(images)!=1 or not attestations:
+                  fail('expected one amd64 image and attestation manifest; found image='+str(len(images))+' attestation='+str(len(attestations))+' root_media='+str([x.get('mediaType') for x in index.get('manifests',[])]))
+              image_manifest=get_blob(images[0])
+              if image_manifest.get('schemaVersion')!=2 or not image_manifest.get('config') or not image_manifest.get('layers'):
+                  fail('invalid image manifest')
+              get_blob(image_manifest['config'])
+              predicates={}; empty_in_toto_subjects=0
+              for desc in attestations:
+                  ann=desc.get('annotations') or {}
+                  if ann.get('vnd.docker.reference.digest')!=images[0]['digest']:
+                      fail('attestation not bound to image manifest')
+                  att_manifest=get_blob(desc)
+                  for layer in att_manifest.get('layers',[]):
+                      if layer.get('mediaType')!='application/vnd.in-toto+json':
+                          continue
+                      statement=get_blob(layer)
+                      kind=statement.get('predicateType','')
+                      if not isinstance(statement.get('subject'),list):
+                          fail('malformed in-toto subject field')
+                      if not statement['subject']:
+                          # Untagged local OCI exports can lack in-toto subject; descriptor-level
+                          # image binding was already independently checked above.
+                          empty_in_toto_subjects+=1
+                      predicates[kind]=statement.get('predicate',{})
+              sbom=next((v for k,v in predicates.items() if k.startswith('https://spdx.dev/Document')),None)
+              provenance=next((v for k,v in predicates.items() if k.startswith('https://slsa.dev/provenance')),None)
+              if not sbom or not sbom.get('packages'): fail('missing or empty SPDX SBOM')
+              if not provenance or not provenance.get('buildDefinition'): fail('missing SLSA build definition')
+              if '4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825' not in json.dumps(provenance):
+                  fail('upstream source pin not traceable in provenance')
+              local_index='sha256:'+hashlib.sha256(index_bytes).hexdigest()
+              metadata=json.loads(pathlib.Path(os.environ['OCI_METADATA']).read_text())
+              recorded=metadata.get('containerimage.digest')
+              if recorded and recorded not in index_digests: fail('OCI exported index vs build metadata digest drift')
+              receipt={
+                  'schema':'truenas-foundry-catalog-offline-oci-attestation/v0',
+                  'status':'OFFLINE_OCI_ATTESTATION_STRUCTURE_PASS_NOT_RELEASE',
+                  'source_commit':os.environ['SOURCE_COMMIT'],
+                  'source_ref':'4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825',
+                  'base_image':json.loads(pathlib.Path('build/base-image.lock.json').read_text())['image'],
+                  'oci_export_root_index_digest':local_index,
+                  'image_index_digest':recorded,
+                  'image_manifest_digest':images[0]['digest'],
+                  'sbom_package_count':len(sbom['packages']),
+                  'attestation_types':sorted(predicates),
+                  'local_empty_in_toto_subjects':empty_in_toto_subjects,
+                  'registry_digest':None,
+                  'physical_apply':'HOLD',
+                  'explicit_nonclaims':['No GHCR push or registry digest','Untagged OCI in-toto subjects may be empty; descriptor binding only',
+                                        'Not an independently signed SLSA provenance',
+                                        'Not independent source or runtime acceptance','No TrueNAS native installation']}
+              print(json.dumps(receipt,sort_keys=True,indent=2))
+              with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as summary:
+                  summary.write('### Disposable-only OCI supply-chain receipt\n\n```json\n'+json.dumps(receipt,indent=2)+'\n```\n')
+          PY
