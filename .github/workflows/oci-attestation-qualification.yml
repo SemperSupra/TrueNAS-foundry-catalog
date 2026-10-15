@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify pinned inputs and source identity
         shell: bash
         run: |
@@ -58,6 +59,7 @@ jobs:
       - name: Independently verify local OCI blob tree and attestation predicates
         shell: bash
         env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           OCI_TAR: ${{ runner.temp }}/catalog-candidate.oci.tar
           OCI_METADATA: ${{ runner.temp }}/catalog-build-metadata.json
         run: |
@@ -82,15 +84,25 @@ jobs:
                   if hashlib.sha256(data).hexdigest()!=digest[7:]: fail('blob digest mismatch')
                   if len(data)!=descriptor.get('size'): fail('blob size mismatch')
                   return json.loads(data)
-              images=[]; attestations=[]
-              for desc in index.get('manifests',[]):
-                  platform=desc.get('platform') or {}
-                  annotation=desc.get('annotations') or {}
-                  if platform.get('os')=='linux' and platform.get('architecture')=='amd64':
-                      images.append(desc)
-                  elif annotation.get('vnd.docker.reference.type')=='attestation-manifest':
-                      attestations.append(desc)
-              if len(images)!=1 or not attestations: fail('expected one amd64 image and attestation manifest')
+              images=[]; attestations=[]; index_digests={'sha256:'+hashlib.sha256(index_bytes).hexdigest()}
+              def walk(current,depth=0):
+                  if depth>4: fail('nested OCI index too deep')
+                  for desc in current.get('manifests',[]):
+                      mt=desc.get('mediaType','')
+                      if mt in ('application/vnd.oci.image.index.v1+json','application/vnd.docker.distribution.manifest.list.v2+json'):
+                          if desc['digest'] in index_digests: fail('recursive OCI index')
+                          index_digests.add(desc['digest'])
+                          walk(get_blob(desc),depth+1)
+                          continue
+                      platform=desc.get('platform') or {}
+                      annotation=desc.get('annotations') or {}
+                      if platform.get('os')=='linux' and platform.get('architecture')=='amd64':
+                          images.append(desc)
+                      elif annotation.get('vnd.docker.reference.type')=='attestation-manifest':
+                          attestations.append(desc)
+              walk(index)
+              if len(images)!=1 or not attestations:
+                  fail('expected one amd64 image and attestation manifest; found image='+str(len(images))+' attestation='+str(len(attestations))+' root_media='+str([x.get('mediaType') for x in index.get('manifests',[])]))
               image_manifest=get_blob(images[0])
               if image_manifest.get('schemaVersion')!=2 or not image_manifest.get('config') or not image_manifest.get('layers'):
                   fail('invalid image manifest')
@@ -118,14 +130,15 @@ jobs:
               local_index='sha256:'+hashlib.sha256(index_bytes).hexdigest()
               metadata=json.loads(pathlib.Path(os.environ['OCI_METADATA']).read_text())
               recorded=metadata.get('containerimage.digest')
-              if recorded and recorded!=local_index: fail('OCI index vs metadata digest drift')
+              if recorded and recorded not in index_digests: fail('OCI exported index vs build metadata digest drift')
               receipt={
                   'schema':'truenas-foundry-catalog-offline-oci-attestation/v0',
                   'status':'OFFLINE_OCI_ATTESTATION_STRUCTURE_PASS_NOT_RELEASE',
-                  'source_commit':os.environ['GITHUB_SHA'],
+                  'source_commit':os.environ['SOURCE_COMMIT'],
                   'source_ref':'4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825',
                   'base_image':json.loads(pathlib.Path('build/base-image.lock.json').read_text())['image'],
-                  'oci_export_index_digest':local_index,
+                  'oci_export_root_index_digest':local_index,
+                  'image_index_digest':recorded,
                   'image_manifest_digest':images[0]['digest'],
                   'sbom_package_count':len(sbom['packages']),
                   'attestation_types':sorted(predicates),
@@ -135,5 +148,5 @@ jobs:
                                         'Not independent source or runtime acceptance','No TrueNAS native installation']}
               print(json.dumps(receipt,sort_keys=True,indent=2))
               with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as summary:
-                  summary.write('### Disposable-only OCI supply-chain receipt\\n\\n```json\\n'+json.dumps(receipt,indent=2)+'\\n```\\n')
+                  summary.write('### Disposable-only OCI supply-chain receipt\n\n```json\n'+json.dumps(receipt,indent=2)+'\n```\n')
           PY
