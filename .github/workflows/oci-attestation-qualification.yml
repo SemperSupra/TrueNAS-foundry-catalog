@@ -40,12 +40,12 @@ jobs:
                            '002bee37818faab404a39537c15b52ce3e42207c7e4582b11ef29445c8367923']:
               assert expected in fetch
           PY
-      - name: Resolve currently mutable BuildKit and Syft scanner digests for lock review
+      - name: Verify immutable BuildKit and SBOM generator indexes
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect docker.io/moby/buildkit:buildx-stable-1
-          docker buildx imagetools inspect docker.io/docker/buildkit-syft-scanner:stable-1
+          docker buildx imagetools inspect docker.io/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea >/dev/null
+          docker buildx imagetools inspect docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 >/dev/null
       - name: Build local OCI layout with SPDX SBOM and SLSA provenance
         shell: bash
         env:
@@ -53,13 +53,13 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx version
-          docker buildx create --name catalog-evidence --driver docker-container --use
+          docker buildx create --name catalog-evidence --driver docker-container --driver-opt "image=docker.io/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea" --use
           docker buildx inspect --bootstrap
           BASE="$(python3 -c 'import json; print(json.load(open("build/base-image.lock.json"))["image"])')"
           docker buildx build --progress plain --platform linux/amd64 \
             --build-arg "PYTHON_IMAGE=$BASE" \
             --build-arg "FOUNDRY_REF=4efc55a2d0069bd4a4a0b7fcbb4eec8c7e091825" \
-            --provenance=mode=max --sbom=true \
+            --provenance=mode=max --sbom="generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9" \
             --output "type=oci,dest=$RUNNER_TEMP/catalog-candidate.oci.tar" \
             --metadata-file "$RUNNER_TEMP/catalog-build-metadata.json" .
       - name: Independently verify local OCI blob tree and attestation predicates
