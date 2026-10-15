@@ -1,0 +1,22 @@
+name: Qualify GHCR read-only registry contract
+on:
+  pull_request:
+    paths:
+      - 'scripts/verify_registry_candidate.py'
+      - 'tests/test_registry_readonly.py'
+      - '.github/workflows/registry-readonly-qualification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  registry-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test fail-closed registry identity and manifest contract
+        run: python3 -m unittest discover -s tests -p test_registry_readonly.py -v
+      - name: Confirm no package writer
+        run: echo 'Read-only qualification; no GHCR package publication or physical TrueNAS apply.'
