@@ -18,5 +18,25 @@ jobs:
           persist-credentials: false
       - name: Test fail-closed registry identity and manifest contract
         run: python3 -m unittest discover -s tests -p test_registry_readonly.py -v
+      - name: Confirm real registry raw manifest identity (read-only official Python base)
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="$(python3 -c 'import json; print(json.load(open("build/base-image.lock.json"))["image"])')"
+          docker buildx imagetools inspect --raw "$REF" > "$RUNNER_TEMP/registry-manifest.json"
+          python3 - "$REF" "$RUNNER_TEMP/registry-manifest.json" <<'PY'
+          import hashlib, json, pathlib, sys
+          reference, path = sys.argv[1:]
+          raw = pathlib.Path(path).read_bytes()
+          expected = reference.rsplit("@sha256:", 1)[1]
+          observed = hashlib.sha256(raw).hexdigest()
+          if observed != expected:
+              if hashlib.sha256(raw.removesuffix(b"\n")).hexdigest() == expected:
+                  raise SystemExit("raw inspector appends newline; strict readback cannot yet be admitted")
+              raise SystemExit("raw registry digest mismatch")
+          manifest = json.loads(raw)
+          assert manifest["schemaVersion"] == 2
+          print("PASS: immutable registry manifest byte digest independently matches requested sha256")
+          PY
       - name: Confirm no package writer
         run: echo 'Read-only qualification; no GHCR package publication or physical TrueNAS apply.'
