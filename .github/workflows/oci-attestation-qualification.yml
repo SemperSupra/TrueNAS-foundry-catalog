@@ -44,8 +44,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect docker.io/moby/buildkit:buildx-stable-1 | head -n 8
-          docker buildx imagetools inspect docker.io/docker/buildkit-syft-scanner:stable-1 | head -n 8
+          docker buildx imagetools inspect docker.io/moby/buildkit:buildx-stable-1
+          docker buildx imagetools inspect docker.io/docker/buildkit-syft-scanner:stable-1
       - name: Build local OCI layout with SPDX SBOM and SLSA provenance
         shell: bash
         env:
